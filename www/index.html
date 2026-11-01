@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wedding Guest Scanner & Exporter</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tesseract.js for Image-to-Text (OCR) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <!-- jsPDF and AutoTable for PDF Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body class="p-4 md:p-8 max-w-3xl mx-auto bg-gray-100 font-sans">
+
+    <!-- Add Guest Section -->
+    <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+        <h2 class="text-2xl font-bold mb-4 text-gray-800">Add Guest via Camera</h2>
+        
+        <div class="mb-6 flex flex-col items-center border-2 border-dashed border-gray-300 p-6 rounded-lg bg-gray-50">
+            <input type="file" accept="image/*" capture="environment" id="cameraInput" class="hidden">
+            
+            <button onclick="document.getElementById('cameraInput').click()" id="scanBtn" class="bg-purple-600 text-white rounded-full w-16 h-16 flex items-center justify-center text-3xl shadow-lg transition duration-200 hover:bg-purple-700 focus:outline-none">
+                📷
+            </button>
+            <p class="text-sm font-medium text-gray-700 mt-3 text-center" id="scanStatus">Tap to scan an invitation card or envelope</p>
+            
+            <div id="progressContainer" class="w-full mt-4 hidden">
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="progressBar" class="bg-purple-600 h-2.5 rounded-full" style="width: 0%"></div>
+                </div>
+                <p class="text-xs text-gray-500 text-center mt-1" id="progressText">Analyzing image... 0%</p>
+            </div>
+        </div>
+
+        <form id="guestForm" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Name</label>
+                <input type="text" id="name" required class="mt-1 block w-full border-gray-300 rounded-md border p-2 focus:ring-purple-500 focus:border-purple-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Mobile Number</label>
+                <input type="text" id="mobile" class="mt-1 block w-full border-gray-300 rounded-md border p-2 focus:ring-purple-500 focus:border-purple-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Address / Scanned Details</label>
+                <textarea id="address" rows="3" required class="mt-1 block w-full border-gray-300 rounded-md border p-2 focus:ring-purple-500 focus:border-purple-500"></textarea>
+            </div>
+            <button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-md hover:bg-green-700 transition">Save Guest</button>
+        </form>
+    </div>
+
+    <!-- Database Section -->
+    <div class="bg-white p-6 rounded-lg shadow-md">
+        <div class="flex flex-col md:flex-row md:items-center justify-between mb-4 space-y-4 md:space-y-0">
+            <h2 class="text-2xl font-bold text-gray-800">Guest Database</h2>
+            
+            <!-- Export Buttons -->
+            <div class="flex space-x-2">
+                <button onclick="exportToTXT()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-bold shadow transition">
+                    📄 Export TXT
+                </button>
+                <button onclick="exportToPDF()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-bold shadow transition">
+                    📕 Export PDF
+                </button>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-gray-100">
+                        <th class="p-3 border-b">Name</th>
+                        <th class="p-3 border-b">Mobile</th>
+                        <th class="p-3 border-b">Address</th>
+                        <th class="p-3 border-b text-center">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="guestTableBody">
+                    <!-- Rows injected here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // --- LOCAL DATABASE LOGIC ---
+        let guests = JSON.parse(localStorage.getItem('weddingGuestsScanner')) || [];
+        let editIndex = -1;
+
+        const form = document.getElementById('guestForm');
+        const nameInput = document.getElementById('name');
+        const mobileInput = document.getElementById('mobile');
+        const addressInput = document.getElementById('address');
+        const tableBody = document.getElementById('guestTableBody');
+
+        function renderTable() {
+            tableBody.innerHTML = '';
+            guests.forEach((guest, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="p-3 border-b">${guest.name}</td>
+                    <td class="p-3 border-b">${guest.mobile}</td>
+                    <td class="p-3 border-b">${guest.address}</td>
+                    <td class="p-3 border-b text-center space-y-1 md:space-y-0 md:space-x-2">
+                        <button onclick="editGuest(${index})" class="bg-yellow-500 text-white px-3 py-1 rounded text-sm w-full md:w-auto mb-1 md:mb-0">Edit</button>
+                        <button onclick="deleteGuest(${index})" class="bg-red-500 text-white px-3 py-1 rounded text-sm w-full md:w-auto">Delete</button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const newGuest = {
+                name: nameInput.value.trim(),
+                mobile: mobileInput.value.trim(),
+                address: addressInput.value.trim()
+            };
+
+            if (editIndex > -1) {
+                guests[editIndex] = newGuest;
+                editIndex = -1;
+            } else {
+                guests.push(newGuest);
+            }
+
+            localStorage.setItem('weddingGuestsScanner', JSON.stringify(guests));
+            form.reset();
+            renderTable();
+        });
+
+        window.editGuest = function(index) {
+            const guest = guests[index];
+            nameInput.value = guest.name;
+            mobileInput.value = guest.mobile;
+            addressInput.value = guest.address;
+            editIndex = index;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        window.deleteGuest = function(index) {
+            if(confirm('Delete this guest?')) {
+                guests.splice(index, 1);
+                localStorage.setItem('weddingGuestsScanner', JSON.stringify(guests));
+                renderTable();
+            }
+        };
+
+        renderTable();
+
+        // --- EXPORT LOGIC ---
+
+        // 1. Export as clean Text file
+        window.exportToTXT = function() {
+            if (guests.length === 0) {
+                alert("No guests in the database to export.");
+                return;
+            }
+
+            let textContent = "WEDDING GUEST LIST\n==================\n\n";
+            
+            guests.forEach((guest, index) => {
+                textContent += `Guest #${index + 1}\n`;
+                textContent += `Name    : ${guest.name}\n`;
+                textContent += `Mobile  : ${guest.mobile}\n`;
+                textContent += `Address : ${guest.address}\n`;
+                textContent += `--------------------------------------\n\n`;
+            });
+
+            const blob = new Blob([textContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'Wedding_Guest_List.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+
+        // 2. Export as PDF Table
+        window.exportToPDF = function() {
+            if (guests.length === 0) {
+                alert("No guests in the database to export.");
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+
+            // Document Title
+            doc.setFontSize(18);
+            doc.text("Wedding Guest List", 14, 22);
+
+            // Format data for the table
+            const tableData = guests.map((guest, index) => [
+                index + 1, 
+                guest.name, 
+                guest.mobile, 
+                guest.address
+            ]);
+
+            // Generate clean grid table
+            doc.autoTable({
+                startY: 30,
+                head: [['#', 'Name', 'Mobile Number', 'Address']],
+                body: tableData,
+                theme: 'grid',
+                headStyles: { fillColor: [126, 34, 206] }, // Matches purple Tailwind theme
+                styles: { fontSize: 10, cellPadding: 3 },
+                columnStyles: {
+                    0: { cellWidth: 10 },
+                    1: { cellWidth: 40 },
+                    2: { cellWidth: 35 },
+                    3: { cellWidth: 'auto' }
+                }
+            });
+
+            // Trigger download
+            doc.save('Wedding_Guest_List.pdf');
+        };
+
+        // --- CAMERA & OCR LOGIC ---
+        const cameraInput = document.getElementById('cameraInput');
+        const scanStatus = document.getElementById('scanStatus');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const scanBtn = document.getElementById('scanBtn');
+
+        cameraInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            scanBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            scanBtn.disabled = true;
+            scanStatus.innerText = "Reading text from image...";
+            progressContainer.classList.remove('hidden');
+            
+            Tesseract.recognize(
+                file,
+                'eng', 
+                { 
+                    logger: m => {
+                        if (m.status === 'recognizing text') {
+                            const percent = Math.round(m.progress * 100);
+                            progressBar.style.width = percent + '%';
+                            progressText.innerText = `Analyzing image... ${percent}%`;
+                        }
+                    }
+                }
+            ).then(({ data: { text } }) => {
+                parseScannedText(text);
+                
+                scanBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                scanBtn.disabled = false;
+                scanStatus.innerText = "Scan complete! You can edit the details below.";
+                progressContainer.classList.add('hidden');
+                progressBar.style.width = '0%';
+                
+            }).catch(err => {
+                alert("Failed to read the image. Please try again or type manually.");
+                scanBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                scanBtn.disabled = false;
+                scanStatus.innerText = "Tap to scan an invitation card or envelope";
+                progressContainer.classList.add('hidden');
+            });
+        });
+
+        function parseScannedText(rawText) {
+            const lines = rawText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+            const fullText = lines.join(' ');
+
+            const phoneRegex = /(?:\+91[\s-]?)?[6789]\d{2}[\s-]?\d{3}[\s-]?\d{4}|\b\d{10}\b/;
+            const phoneMatch = fullText.match(phoneRegex);
+            
+            let mobile = '';
+            let rawMobileString = '';
+            
+            if (phoneMatch) {
+                rawMobileString = phoneMatch[0];
+                mobile = rawMobileString.replace(/[^0-9]/g, '');
+                if (mobile.length > 10 && mobile.startsWith('91')) {
+                    mobile = mobile.substring(mobile.length - 10);
+                }
+            }
+
+            let name = '';
+            if (lines.length > 0) {
+                name = lines[0];
+                if (name.toLowerCase() === 'to' && lines.length > 1) {
+                    name = lines[1];
+                }
+            }
+
+            let addressLines = lines.filter(line => line !== name);
+            let address = addressLines.join(', ').replace(rawMobileString, '').trim();
+            address = address.replace(/^,+|,+$/g, '').trim();
+
+            nameInput.value = name;
+            mobileInput.value = mobile;
+            addressInput.value = address.length > 0 ? address : fullText;
+        }
+    </script>
+</body>
+</html>
